@@ -1,14 +1,17 @@
 import React, { useState, useCallback, useEffect } from 'react';
-import { Upload, Sparkles, AlertCircle, FileText, ChevronLeft, ChevronRight, Key, Image as ImageIcon, Download } from 'lucide-react';
+import { Upload, Sparkles, AlertCircle, FileText, ChevronLeft, ChevronRight, Key, Image as ImageIcon, Download, Settings } from 'lucide-react';
 import { SlideAnalysis, ProcessingState } from './types';
 import { convertPdfToImages, fileToBase64, generatePdfFromImages } from './services/pdfService';
 import { analyzeSlideImage, editSlideImage } from './services/geminiService';
 import { JsonEditor } from './components/JsonEditor';
 import { SlidePreview } from './components/SlidePreview';
+import { ApiKeyModal } from './components/ApiKeyModal';
+import { loadApiKey, clearApiKey } from './utils/keyStorage';
 
 const App: React.FC = () => {
   // API Key State
-  const [hasApiKey, setHasApiKey] = useState(false);
+  const [apiKey, setApiKey] = useState<string>('');
+  const [showKeyModal, setShowKeyModal] = useState(false);
   const [checkingKey, setCheckingKey] = useState(true);
 
   // Application State
@@ -19,31 +22,16 @@ const App: React.FC = () => {
   const [processingState, setProcessingState] = useState<ProcessingState>({ status: 'idle' });
   const [dragActive, setDragActive] = useState(false);
 
-  // Check for API key on mount
+  // Check for local stored key on mount
   useEffect(() => {
-    const checkKey = async () => {
-      const win = window as any;
-      if (win.aistudio) {
-        const hasKey = await win.aistudio.hasSelectedApiKey();
-        setHasApiKey(hasKey);
-      }
-      setCheckingKey(false);
-    };
-    checkKey();
-  }, []);
-
-  const handleSelectApiKey = async () => {
-    const win = window as any;
-    if (win.aistudio) {
-      try {
-        await win.aistudio.openSelectKey();
-        // Assume success to avoid race condition delays
-        setHasApiKey(true);
-      } catch (e) {
-        console.error("Error selecting key:", e);
-      }
+    const storedKey = loadApiKey();
+    if (storedKey) {
+      setApiKey(storedKey);
+    } else {
+      setShowKeyModal(true); // Prompt user if no key found
     }
-  };
+    setCheckingKey(false);
+  }, []);
 
   // Helper to update specific analysis
   const updateAnalysis = (newAnalysis: SlideAnalysis) => {
@@ -56,19 +44,31 @@ const App: React.FC = () => {
   // Analyze current slide
   const analyzeCurrentSlide = useCallback(async (images: string[], index: number) => {
     if (!images[index] || analyses[index]) return;
+    if (!apiKey) {
+      setShowKeyModal(true);
+      return;
+    }
 
     setProcessingState({ status: 'analyzing', message: `Analyzing Slide ${index + 1}...` });
     try {
-      const result = await analyzeSlideImage(images[index], index);
+      const result = await analyzeSlideImage(apiKey, images[index], index);
       setAnalyses(prev => ({ ...prev, [index]: result }));
       setProcessingState({ status: 'success' });
     } catch (err: any) {
       setProcessingState({ status: 'error', message: err.message || "Failed to analyze slide" });
+      if (err.message && (err.message.includes("403") || err.message.includes("key"))) {
+        setShowKeyModal(true);
+      }
     }
-  }, [analyses]);
+  }, [analyses, apiKey]);
 
   // Handle file input
   const handleFile = useCallback(async (file: File) => {
+    if (!apiKey) {
+      setShowKeyModal(true);
+      return;
+    }
+
     setProcessingState({ status: 'analyzing', message: 'Processing file...' });
     setSlideImages([]);
     setAnalyses({});
@@ -92,7 +92,7 @@ const App: React.FC = () => {
     } catch (err: any) {
       setProcessingState({ status: 'error', message: err.message || "Failed to process file" });
     }
-  }, [analyzeCurrentSlide]);
+  }, [analyzeCurrentSlide, apiKey]);
 
   const handleNext = () => {
     if (currentSlideIndex < slideImages.length - 1) {
@@ -137,62 +137,46 @@ const App: React.FC = () => {
     const currentImage = slideImages[currentSlideIndex];
 
     if (!currentImage || !currentAnalysis) return;
+    if (!apiKey) {
+      setShowKeyModal(true);
+      return;
+    }
 
     setProcessingState({ status: 'generating', message: 'Gemini is recreating your slide with edits...' });
     try {
-      const newImage = await editSlideImage(currentImage, currentAnalysis);
+      const newImage = await editSlideImage(apiKey, currentImage, currentAnalysis);
       setGeneratedImages(prev => ({ ...prev, [currentSlideIndex]: newImage }));
       setProcessingState({ status: 'success' });
     } catch (err: any) {
       if (err.message && (err.message.includes("403") || err.message.includes("key"))) {
-         setHasApiKey(false);
+         setShowKeyModal(true);
       }
       setProcessingState({ status: 'error', message: err.message || "Failed to generate image" });
     }
   };
 
   const handleDownloadPdf = () => {
-    // Construct the full deck: use generated image if available, otherwise original
     const fullDeck: string[] = slideImages.map((original, index) => {
       return generatedImages[index] || original;
     });
     generatePdfFromImages(fullDeck);
   };
 
-  // Render API Key Selection Screen if needed
-  if (!checkingKey && !hasApiKey) {
-    return (
-      <div className="flex h-screen w-full flex-col items-center justify-center bg-slate-50 p-4">
-        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center border border-slate-200">
-          <div className="bg-blue-100 p-4 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-6">
-            <Key className="w-8 h-8 text-blue-600" />
-          </div>
-          <h2 className="text-2xl font-bold text-slate-900 mb-3">API Key Required</h2>
-          <p className="text-slate-600 mb-6">
-            To use the advanced <strong>Gemini 3 Pro Image</strong> model for slide editing, you must select a paid API key from Google Cloud.
-          </p>
-          <button
-            onClick={handleSelectApiKey}
-            className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors shadow-md active:scale-95"
-          >
-            Select API Key
-          </button>
-          <p className="mt-4 text-xs text-slate-400">
-            <a href="https://ai.google.dev/gemini-api/docs/billing" target="_blank" rel="noreferrer" className="underline hover:text-blue-600">
-              Learn more about billing
-            </a>
-          </p>
-        </div>
-      </div>
-    );
-  }
-
   const currentOriginal = slideImages[currentSlideIndex] || null;
   const currentAnalysisData = analyses[currentSlideIndex] || null;
   const currentGenerated = generatedImages[currentSlideIndex] || null;
 
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-50">
+    <div className="flex h-screen w-full flex-col bg-slate-50 relative">
+      
+      {/* API Key Modal */}
+      <ApiKeyModal 
+        isOpen={showKeyModal} 
+        onClose={() => setShowKeyModal(false)}
+        onSave={(key) => setApiKey(key)}
+        initialKey={apiKey}
+      />
+
       {/* Header */}
       <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
         <div className="flex items-center space-x-3">
@@ -206,12 +190,21 @@ const App: React.FC = () => {
              <button
                onClick={handleDownloadPdf}
                className="flex items-center space-x-2 text-sm font-semibold text-slate-600 hover:text-blue-600 transition-colors bg-slate-100 hover:bg-blue-50 px-3 py-2 rounded-lg border border-slate-200 hover:border-blue-200"
-               title="Download entire presentation as PDF (including edits)"
+               title="Download entire presentation as PDF"
              >
                <Download className="w-4 h-4" />
                <span>Export PDF</span>
              </button>
            )}
+           
+           <button 
+             onClick={() => setShowKeyModal(true)}
+             className={`flex items-center space-x-2 text-sm font-medium px-3 py-2 rounded-lg border transition-colors ${apiKey ? 'text-slate-600 bg-white border-slate-200 hover:bg-slate-50' : 'text-red-600 bg-red-50 border-red-200 hover:bg-red-100'}`}
+           >
+              <Key className="w-4 h-4" />
+              <span>{apiKey ? 'API Key Configured' : 'Set API Key'}</span>
+           </button>
+
            <div className="text-sm text-slate-500 flex items-center">
             <span className="bg-blue-100 text-blue-700 text-xs px-2 py-1 rounded-full font-medium mr-2">PRO</span>
             Powered by Gemini 3.0
@@ -241,6 +234,7 @@ const App: React.FC = () => {
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 onChange={handleFileInputChange}
                 accept="application/pdf,image/*"
+                disabled={!apiKey && !currentOriginal} // Optionally disable if no key, but better to let them try and prompt
               />
               <div className="flex flex-col items-center space-y-1 pointer-events-none">
                 {currentOriginal ? (

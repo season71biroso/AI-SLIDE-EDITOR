@@ -9,8 +9,23 @@ const EDITING_MODEL = 'gemini-3-pro-image-preview';
 // Helper to strip data URL prefix for API calls
 const cleanBase64 = (dataUrl: string) => dataUrl.split(',')[1];
 
-export const analyzeSlideImage = async (base64Image: string, slideIndex: number): Promise<SlideAnalysis> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+export const testApiKey = async (apiKey: string): Promise<boolean> => {
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    // Simple fast query to test auth
+    await ai.models.generateContent({
+      model: 'gemini-2.5-flash-latest', // Use a fast model for testing
+      contents: { parts: [{ text: "Hello" }] }
+    });
+    return true;
+  } catch (error) {
+    console.error("API Key Test Failed:", error);
+    return false;
+  }
+};
+
+export const analyzeSlideImage = async (apiKey: string, base64Image: string, slideIndex: number): Promise<SlideAnalysis> => {
+  const ai = new GoogleGenAI({ apiKey });
   const cleanData = cleanBase64(base64Image);
 
   const analysisSchema: Schema = {
@@ -64,10 +79,11 @@ export const analyzeSlideImage = async (base64Image: string, slideIndex: number)
 };
 
 export const editSlideImage = async (
+  apiKey: string,
   originalBase64: string, 
   analysis: SlideAnalysis
 ): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const ai = new GoogleGenAI({ apiKey });
   const cleanData = cleanBase64(originalBase64);
 
   // Format the key data array into clear lines exactly as edited by user
