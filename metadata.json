@@ -1,0 +1,5 @@
+{
+  "name": "AI Slide Editor",
+  "description": "Upload a PDF slide, analyze its structure with Gemini Vision, edit the content definition, and visually regenerate the slide using generative AI.",
+  "requestFramePermissions": []
+}
